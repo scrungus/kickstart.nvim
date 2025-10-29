@@ -136,6 +136,7 @@ vim.o.updatetime = 250
 
 -- Decrease mapped sequence wait time
 vim.o.timeoutlen = 300
+vim.o.ttimeoutlen = 10
 
 -- Configure how new splits should be opened
 vim.o.splitright = true
@@ -199,6 +200,11 @@ vim.keymap.set('n', '<C-l>', '<C-w><C-l>', { desc = 'Move focus to the right win
 vim.keymap.set('n', '<C-j>', '<C-w><C-j>', { desc = 'Move focus to the lower window' })
 vim.keymap.set('n', '<C-k>', '<C-w><C-k>', { desc = 'Move focus to the upper window' })
 
+--- Same navigation works from terminal mode
+vim.keymap.set('t', '<C-h>', '<C-\\><C-n><C-w><C-h>', { desc = 'Move focus to the left window' })
+vim.keymap.set('t', '<C-l>', '<C-\\><C-n><C-w><C-l>', { desc = 'Move focus to the right window' })
+vim.keymap.set('t', '<C-j>', '<C-\\><C-n><C-w><C-j>', { desc = 'Move focus to the lower window' })
+vim.keymap.set('t', '<C-k>', '<C-\\><C-n><C-w><C-k>', { desc = 'Move focus to the upper window' })
 -- NOTE: Some terminals have colliding keymaps or are not able to send distinct keycodes
 -- vim.keymap.set("n", "<C-S-h>", "<C-w>H", { desc = "Move window to the left" })
 -- vim.keymap.set("n", "<C-S-l>", "<C-w>L", { desc = "Move window to the right" })
@@ -671,7 +677,20 @@ require('lazy').setup({
       --  - settings (table): Override the default settings passed when initializing the server.
       --        For example, to see the options for `lua_ls`, you could go to: https://luals.github.io/wiki/settings/
       local servers = {
-        -- clangd = {},
+        clangd = {
+          cmd = {
+            'clangd',
+            '--background-index',
+            '--clang-tidy',
+            '--header-insertion=iwyu',
+            '--completion-style=detailed',
+            '--function-arg-placeholders',
+          },
+          init_options = {
+            usePlaceholders = true,
+            completeUnimported = true,
+          },
+        },
         -- gopls = {},
         -- pyright = {},
         -- rust_analyzer = {},
@@ -768,6 +787,8 @@ require('lazy').setup({
       end,
       formatters_by_ft = {
         lua = { 'stylua' },
+        cpp = { 'clang-format' },
+        c = { 'clang-format' },
         -- Conform can also run multiple formatters sequentially
         -- python = { "isort", "black" },
         --
@@ -776,7 +797,131 @@ require('lazy').setup({
       },
     },
   },
+  { -- Debugging Support
+    'mfussenegger/nvim-dap',
+    dependencies = {
+      'rcarriga/nvim-dap-ui',
+      'nvim-neotest/nvim-nio',
+      'jay-babu/mason-nvim-dap.nvim',
+      'theHamsta/nvim-dap-virtual-text',
+    },
+    keys = {
+      {
+        '<F5>',
+        function()
+          require('dap').continue()
+        end,
+        desc = 'Debug: Start/Continue',
+      },
+      {
+        '<F10>',
+        function()
+          require('dap').step_over()
+        end,
+        desc = 'Debug: Step Over',
+      },
+      {
+        '<F11>',
+        function()
+          require('dap').step_into()
+        end,
+        desc = 'Debug: Step Into',
+      },
+      {
+        '<F12>',
+        function()
+          require('dap').step_out()
+        end,
+        desc = 'Debug: Step Out',
+      },
+      {
+        '<leader>b',
+        function()
+          require('dap').toggle_breakpoint()
+        end,
+        desc = 'Debug: Toggle Breakpoint',
+      },
+    },
+    config = function()
+      local dap = require 'dap'
+      local dapui = require 'dapui'
 
+      -- Setup
+      dapui.setup()
+      require('dap-virtual-text').setup()
+      require('mason-nvim-dap').setup {
+        ensure_installed = { 'codelldb' },
+        automatic_installation = true,
+        handlers = {},
+      }
+
+      -- Auto open/close UI
+      dap.listeners.after.event_initialized['dapui_config'] = dapui.open
+      dap.listeners.before.event_terminated['dapui_config'] = dapui.close
+      dap.listeners.before.event_exited['dapui_config'] = dapui.close
+
+      -- Codelldb setup
+      dap.adapters.codelldb = {
+        type = 'server',
+        port = '${port}',
+        executable = {
+          command = vim.fn.stdpath 'data' .. '/mason/bin/codelldb',
+          args = { '--port', '${port}' },
+        },
+      }
+
+      dap.configurations.cpp = {
+        {
+          name = 'Launch file',
+          type = 'codelldb',
+          request = 'launch',
+          program = function()
+            return vim.fn.input('Path to executable: ', vim.fn.getcwd() .. '/', 'file')
+          end,
+          cwd = '${workspaceFolder}',
+          stopOnEntry = false,
+        },
+      }
+      dap.configurations.c = dap.configurations.cpp
+    end,
+  },
+  { -- Better terminal integration
+    'akinsho/toggleterm.nvim',
+    version = '*',
+    opts = {
+      size = 20,
+      open_mapping = [[<c-\>]], -- Ctrl+\ to toggle
+      hide_numbers = true,
+      shade_terminals = true,
+      start_in_insert = true,
+      insert_mappings = true,
+      terminal_mappings = true,
+      persist_size = true,
+      direction = 'horizontal', -- or 'vertical', 'float', 'tab'
+      close_on_exit = true,
+      shell = vim.o.shell,
+    },
+    config = function(_, opts)
+      require('toggleterm').setup(opts)
+
+      -- Custom keymaps for running C++ code
+      vim.keymap.set('n', '<leader>tr', function()
+        local file = vim.fn.expand '%'
+        local file_no_ext = vim.fn.expand '%:r'
+        local cmd = string.format('g++ -g %s -o %s -std=c++20 && ./%s', file, file_no_ext, file_no_ext)
+        vim.cmd('TermExec cmd="' .. cmd .. '"')
+      end, { desc = '[T]erminal: Compile & [R]un' })
+      -- Debug mode
+      vim.keymap.set('n', '<leader>td', function()
+        local file = vim.fn.expand '%'
+        local file_no_ext = vim.fn.expand '%:r'
+        local cmd = string.format('g++ -g %s -o %s -ggdb -std=c++20 && ./%s', file, file_no_ext, file_no_ext)
+        vim.cmd('TermExec cmd="' .. cmd .. '"')
+      end, { desc = '[T]erminal: Compile & [R]un' })
+      -- Optional: Create a floating terminal
+      vim.keymap.set('n', '<leader>tf', '<cmd>ToggleTerm direction=float<CR>', { desc = '[T]erminal: [F]loating' })
+    end,
+  },
   { -- Autocompletion
     'saghen/blink.cmp',
     event = 'VimEnter',
