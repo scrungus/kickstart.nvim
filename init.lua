@@ -1,5 +1,4 @@
 --[[
-
 =====================================================================
 ==================== READ THIS BEFORE CONTINUING ====================
 =====================================================================
@@ -252,6 +251,7 @@ rtp:prepend(lazypath)
 --
 -- NOTE: Here is where you install your plugins.
 require('lazy').setup({
+
   -- NOTE: Plugins can be added with a link (or for a github repo: 'owner/repo' link).
   'NMAC427/guess-indent.nvim', -- Detect tabstop and shiftwidth automatically
 
@@ -693,7 +693,18 @@ require('lazy').setup({
         },
         -- gopls = {},
         -- pyright = {},
-        -- rust_analyzer = {},
+        rust_analyzer = {
+          settings = {
+            ['rust-analyzer'] = {
+              check = {
+                command = 'clippy',
+              },
+              cargo = {
+                allFeatures = true,
+              },
+            },
+          },
+        },
         -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
         --
         -- Some languages (like typescript) have entire language plugins that can be useful:
@@ -735,6 +746,8 @@ require('lazy').setup({
       local ensure_installed = vim.tbl_keys(servers or {})
       vim.list_extend(ensure_installed, {
         'stylua', -- Used to format Lua code
+        'rust-analyzer', -- Rust LSP
+        'codelldb', -- Debugger for Rust (and C++)
       })
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
@@ -754,7 +767,38 @@ require('lazy').setup({
       }
     end,
   },
-
+  { -- Modern Rust support for Neovim 0.10+
+    'mrcjkb/rustaceanvim',
+    version = '^5', -- Recommended
+    lazy = false, -- This plugin is already lazy
+    ft = { 'rust' },
+    config = function()
+      vim.g.rustaceanvim = {
+        server = {
+          on_attach = function(client, bufnr)
+            -- Hover actions
+            vim.keymap.set('n', '<C-space>', function()
+              vim.cmd.RustLsp('hover', 'actions')
+            end, { buffer = bufnr, desc = 'Rust: Hover Actions' })
+            -- Code action groups
+            vim.keymap.set('n', '<Leader>a', function()
+              vim.cmd.RustLsp 'codeAction'
+            end, { buffer = bufnr, desc = 'Rust: Code Actions' })
+          end,
+          default_settings = {
+            ['rust-analyzer'] = {
+              check = {
+                command = 'clippy',
+              },
+              cargo = {
+                allFeatures = true,
+              },
+            },
+          },
+        },
+      }
+    end,
+  },
   { -- Autoformat
     'stevearc/conform.nvim',
     event = { 'BufWritePre' },
@@ -789,6 +833,7 @@ require('lazy').setup({
         lua = { 'stylua' },
         cpp = { 'clang-format' },
         c = { 'clang-format' },
+        rust = { 'rustfmt' },
         -- Conform can also run multiple formatters sequentially
         -- python = { "isort", "black" },
         --
@@ -848,7 +893,7 @@ require('lazy').setup({
 
       -- Setup
       dapui.setup()
-      require('dap-virtual-text').setup()
+      require('nvim-dap-virtual-text').setup()
       require('mason-nvim-dap').setup {
         ensure_installed = { 'codelldb' },
         automatic_installation = true,
@@ -883,6 +928,42 @@ require('lazy').setup({
         },
       }
       dap.configurations.c = dap.configurations.cpp
+
+      -- Rust configuration
+      dap.configurations.rust = {
+        {
+          name = 'Launch Rust Program',
+          type = 'codelldb',
+          request = 'launch',
+          program = function()
+            -- Try to find the binary in target/debug
+            local cwd = vim.fn.getcwd()
+            local binary_name = vim.fn.fnamemodify(cwd, ':t')
+            local debug_path = cwd .. '/target/debug/' .. binary_name
+
+            if vim.fn.filereadable(debug_path) == 1 then
+              return debug_path
+            end
+
+            -- Otherwise, prompt
+            return vim.fn.input('Path to executable: ', cwd .. '/target/debug/', 'file')
+          end,
+          cwd = '${workspaceFolder}',
+          stopOnEntry = false,
+          args = {},
+        },
+        {
+          name = 'Launch Rust Test',
+          type = 'codelldb',
+          request = 'launch',
+          program = function()
+            -- Prompt for the test binary
+            return vim.fn.input('Path to test executable: ', vim.fn.getcwd() .. '/target/debug/deps/', 'file')
+          end,
+          cwd = '${workspaceFolder}',
+          stopOnEntry = false,
+        },
+      }
     end,
   },
   { -- Better terminal integration
@@ -920,6 +1001,12 @@ require('lazy').setup({
       end, { desc = '[T]erminal: Compile & [R]un' })
       -- Optional: Create a floating terminal
       vim.keymap.set('n', '<leader>tf', '<cmd>ToggleTerm direction=float<CR>', { desc = '[T]erminal: [F]loating' })
+      -- Rust/Cargo commands
+      vim.keymap.set('n', '<leader>rc', '<cmd>TermExec cmd="cargo check"<CR>', { desc = '[R]ust: [C]heck' })
+      vim.keymap.set('n', '<leader>rb', '<cmd>TermExec cmd="cargo build"<CR>', { desc = '[R]ust: [B]uild' })
+      vim.keymap.set('n', '<leader>rr', '<cmd>TermExec cmd="cargo run"<CR>', { desc = '[R]ust: [R]un' })
+      vim.keymap.set('n', '<leader>rt', '<cmd>TermExec cmd="cargo test"<CR>', { desc = '[R]ust: [T]est' })
+      vim.keymap.set('n', '<leader>rR', '<cmd>TermExec cmd="cargo run --release"<CR>', { desc = '[R]ust: [R]elease build' })
     end,
   },
   { -- Autocompletion
@@ -980,7 +1067,7 @@ require('lazy').setup({
         -- <c-k>: Toggle signature help
         --
         -- See :h blink-cmp-config-keymap for defining your own keymap
-        preset = 'default',
+        preset = 'super-tab',
 
         -- For more advanced Luasnip keymaps (e.g. selecting choice nodes, expansion) see:
         --    https://github.com/L3MON4D3/LuaSnip?tab=readme-ov-file#keymaps
@@ -1089,7 +1176,7 @@ require('lazy').setup({
     main = 'nvim-treesitter.configs', -- Sets main module to use for opts
     -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
     opts = {
-      ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
+      ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'rust', 'toml' },
       -- Autoinstall languages that are not installed
       auto_install = true,
       highlight = {
